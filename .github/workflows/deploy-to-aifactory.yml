@@ -182,6 +182,7 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           ENVIRONMENT: production
           GITHUB_PAT: ${{ secrets.GH_PAT }}
+          SERVICE_PORT: ${{ inputs.port }}
         run: |
           ssh -i ~/.ssh/aifactory_key \
               -o ConnectTimeout=15 \
@@ -202,6 +203,7 @@ jobs:
           GITHUB_PAT="${GITHUB_PAT}"
           PRE_CMD="${PRE_CMD}"
           POST_CMD="${POST_CMD}"
+          SERVICE_PORT="${SERVICE_PORT}"
 
           echo "=== MedinovAI Deploy Agent ==="
           echo "Service: \${SERVICE_NAME}"
@@ -237,6 +239,11 @@ jobs:
           export COMMIT_SHA="\${COMMIT_SHA}"
           export ENVIRONMENT="\${ENVIRONMENT}"
           export GITHUB_PAT="\${GITHUB_PAT}"
+          # FMEA-DOCKER-002 FIX: Pass SERVICE_PORT as PORT so docker-compose
+          # uses the correct unique port per service (avoids 8080 conflicts).
+          if [ -n "\${SERVICE_PORT}" ] && [ "\${SERVICE_PORT}" != "0" ]; then
+            export PORT="\${SERVICE_PORT}"
+          fi
 
           # Pre-deploy command (if any)
           if [ -n "\${PRE_CMD}" ]; then
