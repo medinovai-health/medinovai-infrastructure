@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+node_modules/
+.next/
+.env
+.env.local
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Vault and sensitive data
+.vault-init.json
+.credentials.env
+*.pem
+*.key
+*.crt
+vault-token
+root-token
+
+# Kubernetes secrets (actual values)
+*secret-values.yaml
+*secrets-decoded.yaml
+
+# jCodemunch local symbol index
+.jcodemunch/
