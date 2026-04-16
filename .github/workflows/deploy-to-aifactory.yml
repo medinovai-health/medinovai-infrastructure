@@ -20,6 +20,7 @@
 name: Deploy to AIFactory
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       service_name:
