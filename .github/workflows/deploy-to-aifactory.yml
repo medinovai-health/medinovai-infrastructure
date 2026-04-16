@@ -164,6 +164,10 @@ jobs:
           done
 
       # ── 6. Deploy via SSH ────────────────────────────────────────────────────
+      # FMEA-SSH-002 FIX: Env vars are expanded into the script locally (unquoted
+      # heredoc). Remote-side `$(date)` and `$var` references that must be
+      # evaluated on the host are escaped with `\$`. Previous quoted heredoc
+      # (<< 'REMOTE_SCRIPT') caused DEPLOY_PATH: unbound variable on remote.
       - name: Deploy to AIFactory
         env:
           DEPLOY_PATH: ${{ steps.vars.outputs.deploy_path }}
@@ -183,24 +187,32 @@ jobs:
               -o ConnectTimeout=15 \
               -o StrictHostKeyChecking=no \
               "${{ secrets.AIFACTORY_SSH_USER }}@${{ secrets.AIFACTORY_SSH_HOST }}" \
-              "bash -s" << 'REMOTE_SCRIPT'
+              "bash -s" <<REMOTE_SCRIPT
           set -euo pipefail
 
           DEPLOY_PATH="${DEPLOY_PATH}"
           REPO_NAME="${REPO_NAME}"
           SERVICE_NAME="${SERVICE_NAME}"
           COMPOSE_FILE="${COMPOSE_FILE}"
+          SHORT_SHA="${SHORT_SHA}"
+          APP_VERSION="${APP_VERSION}"
+          BUILD_NUMBER="${BUILD_NUMBER}"
+          COMMIT_SHA="${COMMIT_SHA}"
+          ENVIRONMENT="${ENVIRONMENT}"
+          GITHUB_PAT="${GITHUB_PAT}"
+          PRE_CMD="${PRE_CMD}"
+          POST_CMD="${POST_CMD}"
 
           echo "=== MedinovAI Deploy Agent ==="
-          echo "Service: ${SERVICE_NAME}"
-          echo "Repo: ${REPO_NAME}"
-          echo "SHA: ${SHORT_SHA}"
-          echo "Path: ${DEPLOY_PATH}"
-          echo "Time: $(date -u)"
+          echo "Service: \${SERVICE_NAME}"
+          echo "Repo: \${REPO_NAME}"
+          echo "SHA: \${SHORT_SHA}"
+          echo "Path: \${DEPLOY_PATH}"
+          echo "Time: \$(date -u)"
 
           # Ensure deploy directory exists
-          mkdir -p "${DEPLOY_PATH}"
-          cd "${DEPLOY_PATH}"
+          mkdir -p "\${DEPLOY_PATH}"
+          cd "\${DEPLOY_PATH}"
 
           # Pull latest code
           if [ -d ".git" ]; then
@@ -209,42 +221,42 @@ jobs:
             git reset --hard origin/main || git reset --hard origin/master
           else
             echo "--- Cloning repository ---"
-            git clone "https://${GITHUB_PAT}@github.com/medinovai-health/${REPO_NAME}.git" .
+            git clone "https://\${GITHUB_PAT}@github.com/medinovai-health/\${REPO_NAME}.git" .
           fi
 
 
           # FMEA-DOCKER-001: Ensure medinovai-net network exists
-          if ! docker network ls --format '{{.Name}}' | grep -q '^medinovai-net$'; then
+          if ! docker network ls --format '{{.Name}}' | grep -q '^medinovai-net\$'; then
             echo "--- Creating medinovai-net network (FMEA-DOCKER-001) ---"
             docker network create medinovai-net || true
           fi
 
           # Set environment variables for docker-compose
-          export APP_VERSION="${APP_VERSION}"
-          export BUILD_NUMBER="${BUILD_NUMBER}"
-          export COMMIT_SHA="${COMMIT_SHA}"
-          export ENVIRONMENT="${ENVIRONMENT}"
-          export GITHUB_PAT="${GITHUB_PAT}"
+          export APP_VERSION="\${APP_VERSION}"
+          export BUILD_NUMBER="\${BUILD_NUMBER}"
+          export COMMIT_SHA="\${COMMIT_SHA}"
+          export ENVIRONMENT="\${ENVIRONMENT}"
+          export GITHUB_PAT="\${GITHUB_PAT}"
 
           # Pre-deploy command (if any)
-          if [ -n "${PRE_CMD}" ]; then
+          if [ -n "\${PRE_CMD}" ]; then
             echo "--- Running pre-deploy command ---"
-            eval "${PRE_CMD}"
+            eval "\${PRE_CMD}"
           fi
 
           # Pull new images and deploy
           echo "--- Building and deploying ---"
-          docker compose -f "${COMPOSE_FILE}" pull --quiet 2>/dev/null || true
-          docker compose -f "${COMPOSE_FILE}" up -d --build --remove-orphans
+          docker compose -f "\${COMPOSE_FILE}" pull --quiet 2>/dev/null || true
+          docker compose -f "\${COMPOSE_FILE}" up -d --build --remove-orphans
 
           # Post-deploy command (if any)
-          if [ -n "${POST_CMD}" ]; then
+          if [ -n "\${POST_CMD}" ]; then
             echo "--- Running post-deploy command ---"
-            eval "${POST_CMD}"
+            eval "\${POST_CMD}"
           fi
 
           echo "--- Deploy complete ---"
-          docker compose -f "${COMPOSE_FILE}" ps
+          docker compose -f "\${COMPOSE_FILE}" ps
           REMOTE_SCRIPT
 
       # ── 7. Health check ──────────────────────────────────────────────────────
