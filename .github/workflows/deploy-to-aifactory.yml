@@ -1,12 +1,8 @@
 # MedinovAI — Reusable AIFactory Deploy Workflow
 # ─────────────────────────────────────────────────────────────────────────────
-# This workflow is the universal deployment template for ALL repos in the
-# medinovai-health org. It handles:
-#   - Next.js apps (docker-compose)
-#   - Go microservices (docker-compose)
-#   - Python services (docker-compose)
-#   - Static sites (nginx)
-#   - Bun/Node services (docker-compose)
+# Universal deployment template for ALL repos in the medinovai-health org.
+# Runs on the self-hosted AIFactory runner (aifactory-medinovai, macOS ARM64).
+# The runner IS the target machine — no SSH/Tailscale hops required.
 #
 # Usage in any repo:
 #   jobs:
@@ -17,20 +13,7 @@
 #         port: 8080
 #       secrets: inherit
 #
-# Required org secrets:
-#   AIFACTORY_SSH_HOST    — MacStudio Tailscale IP (e.g. 100.106.54.9)
-#   AIFACTORY_SSH_USER    — SSH username (e.g. medinovai)
-#   AIFACTORY_SSH_KEY     — SSH private key (PEM format)
-#   AIFACTORY_DEPLOY_PATH — Base deploy path (e.g. /opt/medinovai)
-#   GH_PAT                — GitHub PAT with repo + workflow scopes
-#
-# FMEA Protections built in:
-#   FMEA-DOCKER-001: Creates medinovai-net network if missing
-#   FMEA-GH-001:     Runs on ubuntu-latest (not self-hosted)
-#   FMEA-SSH-001:    Retries SSH connection up to 3 times
-#   FMEA-HEALTH-001: Waits for health endpoint before declaring success
-#
-# @version 2.0.0
+# @version 3.0.0  (self-hosted runner — no SSH/Tailscale)
 # @compliance SOC2, HIPAA (no PHI in logs)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -53,18 +36,13 @@ on:
         required: false
         type: string
         default: '/api/health'
-      deploy_path:
-        description: 'Override deploy path (default: $AIFACTORY_DEPLOY_PATH/$REPO_NAME)'
-        required: false
-        type: string
-        default: ''
       compose_file:
         description: 'docker-compose file name'
         required: false
         type: string
         default: 'docker-compose.yml'
       pre_deploy_cmd:
-        description: 'Command to run before docker compose up (e.g. "npm run migrate")'
+        description: 'Command to run before docker compose up'
         required: false
         type: string
         default: ''
@@ -84,15 +62,16 @@ on:
         type: boolean
         default: true
     secrets:
-      AIFACTORY_SSH_HOST:
-        required: true
-      AIFACTORY_SSH_USER:
-        required: true
-      AIFACTORY_SSH_KEY:
-        required: true
-      AIFACTORY_DEPLOY_PATH:
-        required: true
       GH_PAT:
+        required: false
+      # Legacy secrets — kept for backward-compat signature; not used on self-hosted runner
+      AIFACTORY_SSH_HOST:
+        required: false
+      AIFACTORY_SSH_USER:
+        required: false
+      AIFACTORY_SSH_KEY:
+        required: false
+      AIFACTORY_DEPLOY_PATH:
         required: false
       TS_OAUTH_CLIENT_ID:
         required: false
@@ -101,8 +80,8 @@ on:
 
 jobs:
   deploy:
-    name: Deploy ${{ inputs.service_name }} to AIFactory
-    runs-on: ubuntu-latest
+    name: Deploy ${{ inputs.service_name }} → AIFactory
+    runs-on: [self-hosted, aifactory]
     timeout-minutes: 20
 
     steps:
@@ -112,235 +91,110 @@ jobs:
         with:
           fetch-depth: 1
 
-      # ── 2. Set environment variables ─────────────────────────────────────────
+      # ── 2. Build metadata ────────────────────────────────────────────────────
       - name: Set deploy variables
         id: vars
         run: |
           REPO_NAME="${GITHUB_REPOSITORY##*/}"
-          DEPLOY_PATH="${{ inputs.deploy_path }}"
-          if [ -z "$DEPLOY_PATH" ]; then
-            DEPLOY_PATH="${{ secrets.AIFACTORY_DEPLOY_PATH }}/${REPO_NAME}"
-          fi
           echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
-          echo "deploy_path=${DEPLOY_PATH}" >> $GITHUB_OUTPUT
           echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
           echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
-      # ── 3. Connect to Tailscale VPN ──────────────────────────────────────────
-      - name: Connect Tailscale
-        uses: tailscale/github-action@v2
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
-          tags: tag:ci
-        continue-on-error: true  # Proceed if Tailscale not configured (direct SSH fallback)
-
-      # ── 4. Setup SSH ─────────────────────────────────────────────────────────
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AIFACTORY_SSH_KEY }}" > ~/.ssh/aifactory_key
-          chmod 600 ~/.ssh/aifactory_key
-          ssh-keyscan -H "${{ secrets.AIFACTORY_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      # ── 5. Test SSH connectivity (with retry) ────────────────────────────────
-      - name: Test SSH connection
-        run: |
-          for i in 1 2 3; do
-            if ssh -i ~/.ssh/aifactory_key \
-                   -o ConnectTimeout=15 \
-                   -o StrictHostKeyChecking=no \
-                   "${{ secrets.AIFACTORY_SSH_USER }}@${{ secrets.AIFACTORY_SSH_HOST }}" \
-                   "echo 'SSH OK'"; then
-              echo "SSH connection established on attempt $i"
-              break
-            fi
-            echo "SSH attempt $i failed, retrying in 10s..."
-            sleep 10
-            if [ $i -eq 3 ]; then
-              echo "ERROR: SSH connection failed after 3 attempts"
-              exit 1
-            fi
-          done
-
-      # ── 6. Deploy via SSH ────────────────────────────────────────────────────
-      # FMEA-SSH-002 FIX: Env vars are expanded into the script locally (unquoted
-      # heredoc). Remote-side `$(date)` and `$var` references that must be
-      # evaluated on the host are escaped with `\$`. Previous quoted heredoc
-      # (<< 'REMOTE_SCRIPT') caused DEPLOY_PATH: unbound variable on remote.
-      - name: Deploy to AIFactory
+      # ── 3. Write .env ────────────────────────────────────────────────────────
+      - name: Write .env
         env:
-          DEPLOY_PATH: ${{ steps.vars.outputs.deploy_path }}
-          REPO_NAME: ${{ steps.vars.outputs.repo_name }}
-          SHORT_SHA: ${{ steps.vars.outputs.short_sha }}
-          SERVICE_NAME: ${{ inputs.service_name }}
-          COMPOSE_FILE: ${{ inputs.compose_file }}
-          PRE_CMD: ${{ inputs.pre_deploy_cmd }}
-          POST_CMD: ${{ inputs.post_deploy_cmd }}
-          APP_VERSION: ${{ github.ref_name }}-${{ steps.vars.outputs.short_sha }}
-          BUILD_NUMBER: ${{ github.run_number }}
-          COMMIT_SHA: ${{ github.sha }}
-          ENVIRONMENT: production
-          GITHUB_PAT: ${{ secrets.GH_PAT }}
-          SERVICE_PORT: ${{ inputs.port }}
+          GH_PAT_VALUE: ${{ secrets.GH_PAT }}
         run: |
-          ssh -i ~/.ssh/aifactory_key \
-              -o ConnectTimeout=15 \
-              -o StrictHostKeyChecking=no \
-              "${{ secrets.AIFACTORY_SSH_USER }}@${{ secrets.AIFACTORY_SSH_HOST }}" \
-              "bash -s" <<REMOTE_SCRIPT
-          set -euo pipefail
+          cat > .env <<EOF
+          GITHUB_PAT=${GH_PAT_VALUE}
+          APP_VERSION=${{ github.ref_name }}-${{ steps.vars.outputs.short_sha }}
+          BUILD_NUMBER=${{ github.run_number }}
+          COMMIT_SHA=${{ github.sha }}
+          ENVIRONMENT=production
+          NODE_ENV=production
+          NEXT_TELEMETRY_DISABLED=1
+          AIFACTORY_HOST=100.106.54.9
+          AGENT_LLM_BASE_URL=http://100.106.54.9:10100/v1
+          AGENT_LLM_API_KEY=aifactory
+          AGENT_LLM_MODEL=qwen2.5-coder:32b
+          PORT=${{ inputs.port }}
+          EOF
 
-          DEPLOY_PATH="${DEPLOY_PATH}"
-          REPO_NAME="${REPO_NAME}"
-          SERVICE_NAME="${SERVICE_NAME}"
-          COMPOSE_FILE="${COMPOSE_FILE}"
-          SHORT_SHA="${SHORT_SHA}"
-          APP_VERSION="${APP_VERSION}"
-          BUILD_NUMBER="${BUILD_NUMBER}"
-          COMMIT_SHA="${COMMIT_SHA}"
-          ENVIRONMENT="${ENVIRONMENT}"
-          GITHUB_PAT="${GITHUB_PAT}"
-          PRE_CMD="${PRE_CMD}"
-          POST_CMD="${POST_CMD}"
-          SERVICE_PORT="${SERVICE_PORT}"
+      # ── 4. Network + pre-deploy ──────────────────────────────────────────────
+      - name: Ensure Docker network
+        run: docker network create medinovai-net 2>/dev/null || true
 
-          echo "=== MedinovAI Deploy Agent ==="
-          echo "Service: \${SERVICE_NAME}"
-          echo "Repo: \${REPO_NAME}"
-          echo "SHA: \${SHORT_SHA}"
-          echo "Path: \${DEPLOY_PATH}"
-          echo "Time: \$(date -u)"
+      - name: Pre-deploy command
+        if: inputs.pre_deploy_cmd != ''
+        run: ${{ inputs.pre_deploy_cmd }}
 
-          # Ensure deploy directory exists
-          mkdir -p "\${DEPLOY_PATH}"
-          cd "\${DEPLOY_PATH}"
+      # ── 5. Build & deploy ────────────────────────────────────────────────────
+      - name: Build and deploy
+        run: |
+          docker compose -f ${{ inputs.compose_file }} down --remove-orphans 2>/dev/null || true
+          docker compose -f ${{ inputs.compose_file }} up -d --build --remove-orphans
 
-          # Pull latest code
-          if [ -d ".git" ]; then
-            echo "--- Pulling latest code ---"
-            git fetch origin
-            git reset --hard origin/main || git reset --hard origin/master
-          else
-            echo "--- Cloning repository ---"
-            git clone "https://\${GITHUB_PAT}@github.com/medinovai-health/\${REPO_NAME}.git" .
-          fi
+      # ── 6. Post-deploy ───────────────────────────────────────────────────────
+      - name: Post-deploy command
+        if: inputs.post_deploy_cmd != ''
+        run: ${{ inputs.post_deploy_cmd }}
 
-
-          # FMEA-DOCKER-001: Ensure medinovai-net network exists
-          if ! docker network ls --format '{{.Name}}' | grep -q '^medinovai-net\$'; then
-            echo "--- Creating medinovai-net network (FMEA-DOCKER-001) ---"
-            docker network create medinovai-net || true
-          fi
-
-          # Set environment variables for docker-compose
-          export APP_VERSION="\${APP_VERSION}"
-          export BUILD_NUMBER="\${BUILD_NUMBER}"
-          export COMMIT_SHA="\${COMMIT_SHA}"
-          export ENVIRONMENT="\${ENVIRONMENT}"
-          export GITHUB_PAT="\${GITHUB_PAT}"
-          # FMEA-DOCKER-002 FIX: Pass SERVICE_PORT as PORT so docker-compose
-          # uses the correct unique port per service (avoids 8080 conflicts).
-          if [ -n "\${SERVICE_PORT}" ] && [ "\${SERVICE_PORT}" != "0" ]; then
-            export PORT="\${SERVICE_PORT}"
-          fi
-
-          # Pre-deploy command (if any)
-          if [ -n "\${PRE_CMD}" ]; then
-            echo "--- Running pre-deploy command ---"
-            eval "\${PRE_CMD}"
-          fi
-
-          # Pull new images and deploy
-          echo "--- Building and deploying ---"
-          docker compose -f "\${COMPOSE_FILE}" pull --quiet 2>/dev/null || true
-          docker compose -f "\${COMPOSE_FILE}" up -d --build --remove-orphans
-
-          # Post-deploy command (if any)
-          if [ -n "\${POST_CMD}" ]; then
-            echo "--- Running post-deploy command ---"
-            eval "\${POST_CMD}"
-          fi
-
-          echo "--- Deploy complete ---"
-          docker compose -f "\${COMPOSE_FILE}" ps
-          REMOTE_SCRIPT
-
-      # ── 7. Health check ──────────────────────────────────────────────────────
-      - name: Wait for health check
+      # ── 7. Health check (local — runner is on the same host) ─────────────────
+      - name: Health check
         if: inputs.port > 0
         env:
-          HOST: ${{ secrets.AIFACTORY_SSH_HOST }}
           PORT: ${{ inputs.port }}
           HEALTH_PATH: ${{ inputs.health_path }}
           TIMEOUT: ${{ inputs.timeout_seconds }}
         run: |
-          echo "Waiting for http://${HOST}:${PORT}${HEALTH_PATH} ..."
+          echo "Waiting for http://localhost:${PORT}${HEALTH_PATH} (timeout: ${TIMEOUT}s)..."
           ELAPSED=0
           INTERVAL=5
           while [ $ELAPSED -lt $TIMEOUT ]; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               --connect-timeout 5 --max-time 10 \
-              "http://${HOST}:${PORT}${HEALTH_PATH}" 2>/dev/null || echo "000")
+              "http://localhost:${PORT}${HEALTH_PATH}" 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "✓ Health check passed (HTTP 200) after ${ELAPSED}s"
+              echo "✓ Health check passed after ${ELAPSED}s"
               break
             fi
-            echo "  HTTP ${STATUS} after ${ELAPSED}s, retrying in ${INTERVAL}s..."
+            echo "  HTTP ${STATUS} at ${ELAPSED}s — retrying in ${INTERVAL}s..."
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
           if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "WARNING: Health check did not pass within ${TIMEOUT}s (last status: ${STATUS})"
-            echo "Service may still be starting up. Check logs manually."
+            echo "WARNING: Health check timed out after ${TIMEOUT}s — service may still be starting."
           fi
 
       # ── 8. Notify Vidur ──────────────────────────────────────────────────────
       - name: Notify Vidur event bus
         if: inputs.notify_vidur
         continue-on-error: true
-        env:
-          VIDUR_URL: http://100.106.54.9:9019
-          SERVICE_NAME: ${{ inputs.service_name }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ steps.vars.outputs.short_sha }}
-          TIMESTAMP: ${{ steps.vars.outputs.timestamp }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          curl -s -X POST "${VIDUR_URL}/events" \
+          curl -s -X POST "http://100.106.54.9:37700/events" \
             -H "Content-Type: application/cloudevents+json" \
-            -H "ce-specversion: 1.0" \
-            -H "ce-type: medinovai.deploy.completed" \
-            -H "ce-source: github.com/${REPO}" \
-            -H "ce-id: deploy-${GITHUB_RUN_ID}" \
             -d "{
               \"specversion\": \"1.0\",
               \"type\": \"medinovai.deploy.completed\",
-              \"source\": \"github.com/${REPO}\",
-              \"id\": \"deploy-${GITHUB_RUN_ID}\",
-              \"time\": \"${TIMESTAMP}\",
+              \"source\": \"github.com/${{ github.repository }}\",
+              \"id\": \"deploy-${{ github.run_id }}\",
+              \"time\": \"${{ steps.vars.outputs.timestamp }}\",
               \"data\": {
-                \"service\": \"${SERVICE_NAME}\",
-                \"repo\": \"${REPO}\",
-                \"sha\": \"${SHA}\",
-                \"status\": \"success\",
-                \"runUrl\": \"${RUN_URL}\"
+                \"service\": \"${{ inputs.service_name }}\",
+                \"repo\": \"${{ github.repository }}\",
+                \"sha\": \"${{ steps.vars.outputs.short_sha }}\",
+                \"status\": \"success\"
               }
-            }" || echo "Vidur notification skipped (not available)"
+            }" || true
 
-      # ── 9. GitHub Release summary ─────────────────────────────────────────────
-      - name: Create deployment summary
+      # ── 9. Summary ───────────────────────────────────────────────────────────
+      - name: Deployment summary
         if: always()
         run: |
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## 🚀 Deploy: ${{ inputs.service_name }}
-
-          | Field | Value |
-          |-------|-------|
-          | **Service** | ${{ inputs.service_name }} |
-          | **SHA** | \`${{ steps.vars.outputs.short_sha }}\` |
-          | **Port** | ${{ inputs.port }} |
-          | **Target** | AIFactory (MacStudio) |
-          | **Time** | ${{ steps.vars.outputs.timestamp }} |
-          | **Run** | [View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
-          EOF
+          echo "## Deploy: ${{ inputs.service_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA | \`${{ steps.vars.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Port | ${{ inputs.port }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | \`$(hostname)\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time | ${{ steps.vars.outputs.timestamp }} |" >> $GITHUB_STEP_SUMMARY
