@@ -1,0 +1,123 @@
+# ---------------------------------------------------------------------------
+# MedinovAI org-wide .gitignore baseline (v1, 2026-04-18)
+#
+# Maintainer: medinovai-infrastructure
+# Purpose:    prevent the five most common secret-leak patterns observed in
+#             medinovai-health over 2025-2026. Copy this file into the root
+#             of every repository as `.gitignore` and APPEND any repo-specific
+#             ignores BELOW the "=== repo-specific overrides ===" marker.
+#
+# Rationale for each block is inline. Do not remove blocks without opening an
+# issue on medinovai-infrastructure explaining why.
+# ---------------------------------------------------------------------------
+
+# --- Environment files ------------------------------------------------------
+# The ATS, Cognaium, and medinovaios leaks (incident CyberSecurity#14, April
+# 2026) all originated from committed .env / .env.production files. Never
+# track any .env variant — ship a sanitized *.env*.example instead.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# --- Session / agent backups -----------------------------------------------
+# The zeroTouchMarketing / atlas-os / core-platform mirrors of the OpenAI
+# key (`sk-proj-yxGaT6a...`, incident CyberSecurity#14) were inside
+# agent session logs. Never track them.
+**/agent-transcripts/
+**/session-logs/
+**/.cursor/projects/
+**/state.backup-*/
+**/*.jsonl.reset.*
+
+# --- Secrets, keys, tokens --------------------------------------------------
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+*.keystore
+.vault-init.json
+.credentials.env
+vault-token
+root-token
+id_rsa
+id_ed25519
+*-credentials.json
+*-service-account.json
+gcp-sa-*.json
+
+# --- Kubernetes realised secrets -------------------------------------------
+# Sealed / template manifests are fine; decoded / realised secret values are
+# not. Use the suffix convention below.
+*secret-values.yaml
+*secrets-decoded.yaml
+*sealed-secret-unsealed.yaml
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.ci-*-venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Node / Next.js ---------------------------------------------------------
+node_modules/
+.next/
+.nuxt/
+.out/
+.turbo/
+.parcel-cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Terraform / Pulumi -----------------------------------------------------
+# tfstate files routinely carry live credentials and resource IDs.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# --- IDE / OS ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- MedinovAI tooling ------------------------------------------------------
+.jcodemunch/
+.cursor/worktrees/
+.aifactory-cache/
+
+# --- Build / logs -----------------------------------------------------------
+*.log
+*.pid
+*.seed
+*.tsbuildinfo
+coverage/
+
+# === repo-specific overrides =============================================
+# Add entries below this line. Do not edit the blocks above — they are
+# maintained centrally in medinovai-infrastructure/templates/secret-hygiene.
