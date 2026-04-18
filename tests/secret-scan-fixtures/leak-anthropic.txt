@@ -1,0 +1,2 @@
+# Fixture for medinovai-anthropic-key rule.
+ANTHROPIC_API_KEY=sk-ant-api03-NOT_A_REAL_SECRET_NOT_A_REAL_SECRET_NOT_A_REAL_SECRET_abcd
