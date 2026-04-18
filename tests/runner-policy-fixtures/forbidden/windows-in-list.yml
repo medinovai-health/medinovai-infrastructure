@@ -1,0 +1,8 @@
+name: Fixture — hosted label inside list form (MUST BE FLAGGED)
+on:
+  pull_request: {}
+jobs:
+  bad:
+    runs-on: [windows-latest, fast]
+    steps:
+      - run: echo "even when wrapped in a list, hosted labels are rejected"

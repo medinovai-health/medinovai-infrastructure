@@ -1,0 +1,8 @@
+name: Fixture — ubuntu-latest (MUST BE FLAGGED)
+on:
+  pull_request: {}
+jobs:
+  bad:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "this job would silently never run on the medinovai org"

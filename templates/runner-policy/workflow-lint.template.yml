@@ -1,0 +1,25 @@
+name: Workflow Lint
+
+# -----------------------------------------------------------------------------
+# Org-wide runner-policy lint. Rejects any PR that adds a workflow file using
+# a hosted-runner label the medinovai-health org has no entitlement for
+# (ubuntu-latest, macos-*, windows-*). Delegates to the reusable workflow in
+# medinovai-infrastructure.
+#
+# Source: medinovai-infrastructure/templates/runner-policy/workflow-lint.template.yml
+# Related: medinovai-infrastructure#1 (platform tracker for hosted-runner access)
+# -----------------------------------------------------------------------------
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  runner-policy:
+    uses: medinovai-health/medinovai-infrastructure/.github/workflows/workflow-lint.yml@main
+    with:
+      fail_on_findings: true

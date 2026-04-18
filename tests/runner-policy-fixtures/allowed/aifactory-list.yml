@@ -1,0 +1,8 @@
+name: Fixture — [self-hosted, aifactory] list form (MUST PASS)
+on:
+  pull_request: {}
+jobs:
+  good:
+    runs-on: [self-hosted, aifactory]
+    steps:
+      - run: echo "canonical medinovai runner target"

@@ -1,0 +1,10 @@
+# runner-policy: ignore — legacy workflow kept as a reference fixture
+# for test harness only; must not be flagged.
+name: Fixture — explicit opt-out (MUST PASS via ignore marker)
+on:
+  pull_request: {}
+jobs:
+  legacy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "this file carries the explicit opt-out marker"

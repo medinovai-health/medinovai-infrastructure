@@ -1,0 +1,109 @@
+name: Workflow · Runner Policy Lint
+
+# ---------------------------------------------------------------------------
+# Reusable workflow. Any repo in the medinovai-health org can wire this in
+# to guarantee no new workflow lands with a hosted-runner label that the
+# org isn't entitled to (see medinovai-infrastructure#1).
+#
+# Consumer pattern (copy into your repo's .github/workflows/):
+#
+#   name: Workflow Lint
+#   on:
+#     pull_request:
+#       paths:
+#         - '.github/workflows/**'
+#   permissions:
+#     contents: read
+#   jobs:
+#     runner-policy:
+#       uses: medinovai-health/medinovai-infrastructure/.github/workflows/workflow-lint.yml@main
+#
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      fail_on_findings:
+        description: >-
+          If true (default), a forbidden runs-on value fails the check.
+          Set false for observe-only runs during migration.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  runner-policy:
+    name: Runner policy lint
+    runs-on: [self-hosted, aifactory]
+    steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v4
+
+      - name: Fetch the linter script from medinovai-infrastructure@main
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runner-policy"
+          curl -fsSL \
+            "https://raw.githubusercontent.com/medinovai-health/medinovai-infrastructure/main/templates/runner-policy/lint-workflow-runners.py" \
+            -o "$RUNNER_TEMP/runner-policy/lint-workflow-runners.py"
+          head -5 "$RUNNER_TEMP/runner-policy/lint-workflow-runners.py"
+
+      - name: Resolve Python 3.12 + install PyYAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.12 --version
+          python3.12 -m venv "$RUNNER_TEMP/rp-venv"
+          "$RUNNER_TEMP/rp-venv/bin/pip" install --quiet --upgrade pip
+          "$RUNNER_TEMP/rp-venv/bin/pip" install --quiet pyyaml==6.0.2
+
+      - name: Run lint-workflow-runners
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=$("$RUNNER_TEMP/rp-venv/bin/python" \
+            "$RUNNER_TEMP/runner-policy/lint-workflow-runners.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --format text)
+          echo "$out"
+
+          # Exit-code propagation: the script returns 1 on violations.
+          # Re-run to capture structured output for the run summary, so
+          # PR reviewers get a readable breakdown without scrolling logs.
+          json=$("$RUNNER_TEMP/rp-venv/bin/python" \
+            "$RUNNER_TEMP/runner-policy/lint-workflow-runners.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --format json || true)
+
+          {
+            echo "### Runner policy lint"
+            echo ""
+            echo "\`\`\`json"
+            echo "$json"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          status=0
+          "$RUNNER_TEMP/rp-venv/bin/python" \
+            "$RUNNER_TEMP/runner-policy/lint-workflow-runners.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --format text > /dev/null || status=$?
+
+          if [ "$status" -eq 0 ]; then
+            echo "::notice::Runner policy lint passed."
+            exit 0
+          fi
+
+          if [ "${{ inputs.fail_on_findings }}" = "true" ]; then
+            echo "::error::Runner policy lint found forbidden hosted-runner labels."
+            echo "::error::Replace 'ubuntu-latest' / 'macos-*' / 'windows-*' with [self-hosted, aifactory]."
+            echo "::error::See medinovai-infrastructure#1 for the platform-level tracker."
+            exit "$status"
+          fi
+
+          echo "::warning::Runner policy lint found violations (observe-only mode)."
+          exit 0
