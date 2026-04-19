@@ -1,0 +1,146 @@
+name: Workflow-Lint · Self-Test
+
+# ---------------------------------------------------------------------------
+# Runs on every PR that touches the org-wide runner-policy linter or its
+# fixtures. Asserts:
+#
+#   1. The linter FLAGS every fixture under tests/runner-policy-fixtures/forbidden/
+#   2. The linter ACCEPTS every fixture under tests/runner-policy-fixtures/allowed/
+#   3. The linter HONOURS the `# runner-policy: ignore` marker under
+#      tests/runner-policy-fixtures/ignored/
+#
+# If any of these flips, the reusable workflow-lint.yml can't be trusted
+# and any adoption PR downstream would ship a broken gate into the
+# consumer repo. Fail the check, hold the line.
+# ---------------------------------------------------------------------------
+
+on:
+  pull_request:
+    paths:
+      - 'templates/runner-policy/**'
+      - '.github/workflows/workflow-lint.yml'
+      - '.github/workflows/workflow-lint-selftest.yml'
+      - 'tests/runner-policy-fixtures/**'
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: Verify linter catches every forbidden shape
+    runs-on: [self-hosted, aifactory]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve Python 3.12 + install PyYAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3.12 --version
+          python3.12 -m venv "$RUNNER_TEMP/rp-venv"
+          "$RUNNER_TEMP/rp-venv/bin/pip" install --quiet --upgrade pip
+          "$RUNNER_TEMP/rp-venv/bin/pip" install --quiet pyyaml==6.0.2
+
+      - name: Assertion 1 — forbidden fixtures MUST be flagged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Build an isolated fake repo for each forbidden fixture. The linter
+          # walks .github/workflows/, so we drop a single fixture into that
+          # layout per iteration to get a clean per-file verdict.
+          missing=0
+          for f in tests/runner-policy-fixtures/forbidden/*.yml; do
+            name=$(basename "$f")
+            work="$RUNNER_TEMP/forbidden-$name"
+            mkdir -p "$work/.github/workflows"
+            cp "$f" "$work/.github/workflows/"
+
+            set +e
+            "$RUNNER_TEMP/rp-venv/bin/python" \
+              templates/runner-policy/lint-workflow-runners.py \
+              --repo "$work" \
+              --format json > "$work/out.json"
+            rc=$?
+            set -e
+
+            echo "--- $name (exit=$rc) ---"
+            cat "$work/out.json"
+
+            if [ "$rc" -ne 1 ]; then
+              echo "::error::forbidden fixture '$name' did NOT fail the linter (expected exit 1, got $rc)"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+          echo "OK: all forbidden fixtures were correctly flagged."
+
+      - name: Assertion 2 — allowed fixtures MUST pass clean
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bad=0
+          for f in tests/runner-policy-fixtures/allowed/*.yml; do
+            name=$(basename "$f")
+            work="$RUNNER_TEMP/allowed-$name"
+            mkdir -p "$work/.github/workflows"
+            cp "$f" "$work/.github/workflows/"
+
+            set +e
+            "$RUNNER_TEMP/rp-venv/bin/python" \
+              templates/runner-policy/lint-workflow-runners.py \
+              --repo "$work" \
+              --format json > "$work/out.json"
+            rc=$?
+            set -e
+
+            echo "--- $name (exit=$rc) ---"
+            cat "$work/out.json"
+
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::allowed fixture '$name' triggered the linter (expected exit 0, got $rc)"
+              bad=1
+            fi
+          done
+          if [ "$bad" -ne 0 ]; then exit 1; fi
+          echo "OK: all allowed fixtures passed clean."
+
+      - name: Assertion 3 — ignored fixtures MUST pass via opt-out marker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bad=0
+          for f in tests/runner-policy-fixtures/ignored/*.yml; do
+            name=$(basename "$f")
+            work="$RUNNER_TEMP/ignored-$name"
+            mkdir -p "$work/.github/workflows"
+            cp "$f" "$work/.github/workflows/"
+
+            set +e
+            "$RUNNER_TEMP/rp-venv/bin/python" \
+              templates/runner-policy/lint-workflow-runners.py \
+              --repo "$work" \
+              --format json > "$work/out.json"
+            rc=$?
+            set -e
+
+            echo "--- $name (exit=$rc) ---"
+            cat "$work/out.json"
+
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::ignored fixture '$name' was NOT honoured (expected exit 0, got $rc)"
+              bad=1
+            fi
+
+            # Extra defensive assertion: when the opt-out marker works, the
+            # fixture must produce zero findings. If it produced findings but
+            # the tool still exited 0, that's a silent semantics drift.
+            if ! grep -q '"errors": 0' "$work/out.json"; then
+              echo "::error::ignored fixture '$name' produced findings despite opt-out marker"
+              bad=1
+            fi
+          done
+          if [ "$bad" -ne 0 ]; then exit 1; fi
+          echo "OK: all ignored fixtures were correctly skipped."

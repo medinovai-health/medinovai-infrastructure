@@ -1,0 +1,6 @@
+name: Fixture — reusable workflow caller (MUST PASS, no runs-on needed)
+on:
+  pull_request: {}
+jobs:
+  delegated:
+    uses: medinovai-health/medinovai-infrastructure/.github/workflows/secret-scan.yml@main
