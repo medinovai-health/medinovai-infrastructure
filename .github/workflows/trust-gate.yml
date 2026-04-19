@@ -1,0 +1,29 @@
+# trust-gate-caller.yml — Template for calling the Trust Gate from any repo
+#
+# Copy this file to .github/workflows/trust-gate.yml in your repo.
+# Update the `language:` input to match your repo's primary language.
+# Set `phi_bearing: true` for any Tier-5 clinical repo.
+#
+# Branch protection configuration (set once per repo via GitHub UI or API):
+#   Settings → Branches → Branch protection rules → Require status checks:
+#     - "trust-gate / secret-scan"
+#     - "trust-gate / manifest"
+#
+# For PHI-bearing repos, also require:
+#     - "trust-gate / dependency-audit"
+
+name: Trust Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  trust-gate:
+    uses: medinovai-health/medinovai-2ag-deploy/.github/workflows/trust-gate.yml@main
+    with:
+      language: node          # Change to: node | python | go | mixed
+      phi_bearing: false      # Set true for Tier-5 clinical repos
+    secrets: inherit
