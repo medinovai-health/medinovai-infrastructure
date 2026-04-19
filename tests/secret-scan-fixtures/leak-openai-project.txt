@@ -1,0 +1,4 @@
+# Fixture for medinovai-openai-project-key rule.
+# The string below is obviously fake (40+ chars of the literal "NOT_A_REAL_SECRET")
+# but matches the regex pattern.
+api_key = "sk-proj-NOT_A_REAL_SECRET_NOT_A_REAL_SECRET_NOT_A_REAL_SECRET_1234567890"

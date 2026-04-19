@@ -1,0 +1,7 @@
+version: "3.9"
+services:
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_PASSWORD: FixturePassw0rd_NotReal_
+      MYSQL_ROOT_PASSWORD: FixtureRootPw_NotReal_1234

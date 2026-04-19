@@ -1,0 +1,87 @@
+# ---------------------------------------------------------------------------
+# MedinovAI org-wide pre-commit baseline (v1, 2026-04-18)
+#
+# Maintainer: medinovai-infrastructure
+# Purpose:    stop secrets from ever being committed locally. Copy into repo
+#             root as `.pre-commit-config.yaml`, then run:
+#
+#               pip install pre-commit   # once per machine
+#               pre-commit install       # once per clone
+#               pre-commit run --all-files  # smoke-test before first push
+#
+# This is the *local* defence in depth. The *remote* defence is the reusable
+# secret-scan workflow at
+#   medinovai-infrastructure/.github/workflows/secret-scan.yml
+# which every repo should reference (see README in this directory).
+# ---------------------------------------------------------------------------
+
+default_language_version:
+  python: python3.12
+
+repos:
+  # --- Secret scanning (primary) -------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        # Use the shared allowlist so false positives are managed centrally.
+        args: ["--config", ".gitleaks.toml"]
+
+  # --- Secret scanning (secondary, belt + braces) --------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        # detect-secrets complements gitleaks because its default plugins
+        # catch different patterns (entropy-based high-confidence strings,
+        # Slack tokens, JWTs).
+
+  # --- Obvious hygiene gates -----------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        exclude: ^.*\.md$
+      - id: detect-private-key
+      - id: check-case-conflict
+
+  # --- No .env / session-log additions -------------------------------------
+  # The five live-key incidents in CyberSecurity#14 (April 2026) all involved
+  # either a committed .env or a committed agent session log. Block both.
+  - repo: local
+    hooks:
+      - id: no-env-files
+        name: "Block committed .env files (use .env.example)"
+        entry: >-
+          bash -c '
+            bad=$(echo "$@" | tr " " "\n" | grep -E "(^|/)\.env(\..+)?$" |
+              grep -vE "\.example$" || true);
+            if [ -n "$bad" ]; then
+              echo "Refusing to commit .env files:"; echo "$bad";
+              echo "Ship a sanitised *.env*.example template instead.";
+              exit 1;
+            fi' --
+        language: system
+        types: [file]
+
+      - id: no-agent-session-logs
+        name: "Block committed agent / session log dumps"
+        entry: >-
+          bash -c '
+            bad=$(echo "$@" | tr " " "\n" |
+              grep -E "(agent-transcripts|session-logs|state\.backup-|\.jsonl\.reset\.)" ||
+              true);
+            if [ -n "$bad" ]; then
+              echo "Refusing to commit agent session artefacts:"; echo "$bad";
+              echo "These routinely contain live API keys (see CyberSecurity#14).";
+              exit 1;
+            fi' --
+        language: system
+        types: [file]
