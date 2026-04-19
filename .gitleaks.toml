@@ -1,0 +1,87 @@
+# ---------------------------------------------------------------------------
+# MedinovAI org-wide gitleaks config (v1, 2026-04-18)
+#
+# Maintainer: medinovai-infrastructure
+# Purpose:    shared gitleaks ruleset + allowlist. Extends the gitleaks
+#             built-in default ruleset (OpenAI, Anthropic, AWS, GCP, Slack,
+#             JWT, generic high-entropy, etc.) and adds MedinovAI-specific
+#             rules for the leak patterns we have actually seen in-org.
+#
+# Copy this file into your repo root as `.gitleaks.toml`.
+# ---------------------------------------------------------------------------
+
+# Extend the gitleaks built-ins rather than replacing them.
+[extend]
+useDefault = true
+
+# --- MedinovAI-specific rules ----------------------------------------------
+[[rules]]
+id          = "medinovai-openai-project-key"
+description = "OpenAI project-scoped API key (sk-proj-...)"
+regex       = '''sk-proj-[A-Za-z0-9_\-]{40,}'''
+tags        = ["key", "openai", "medinovai"]
+
+[[rules]]
+id          = "medinovai-anthropic-key"
+description = "Anthropic API key (sk-ant-api03-...)"
+regex       = '''sk-ant-api03-[A-Za-z0-9_\-]{40,}'''
+tags        = ["key", "anthropic", "medinovai"]
+
+[[rules]]
+id          = "medinovai-next-public-secret"
+description = "NEXT_PUBLIC_* variable carrying a server-only secret name"
+# NEXT_PUBLIC_ ships to the browser bundle — never put real secrets here.
+# The Cognaium leak (CyberSecurity#14) was exactly this pattern.
+regex       = '''NEXT_PUBLIC_(OPENAI|ANTHROPIC|MYSQL|POSTGRES|DB|VAULT|AWS|GCP|SLACK|STRIPE|TWILIO|SENDGRID)_[A-Z_]*\s*=\s*[^\s"#]+'''
+tags        = ["key", "nextjs", "medinovai"]
+
+[[rules]]
+id          = "medinovai-hardcoded-mysql-password"
+description = "Hardcoded MySQL/Postgres password in a script or compose file"
+regex       = '''(MYSQL_PASSWORD|MYSQL_ROOT_PASSWORD|POSTGRES_PASSWORD|DB_PASSWORD)\s*[:=]\s*["']?[A-Za-z0-9@#\$%\^&*\-_]{8,}["']?'''
+tags        = ["password", "medinovai"]
+# Allowlist env-var interpolation and the REPLACE_ME placeholder.
+[rules.allowlist]
+regexes = [
+  '''\$\{[A-Z_]+\}''',
+  '''\$\{[A-Z_]+:-[^}]+\}''',
+  '''REPLACE_ME''',
+  '''REDACTED_[A-Z_]+''',
+  '''your[-_]password''',
+  '''example''',
+]
+
+# --- Global allowlist -------------------------------------------------------
+[allowlist]
+description = "Shared MedinovAI allowlist"
+paths = [
+  # Test fixtures that legitimately carry fake-looking strings.
+  '''(^|/)tests?/fixtures/''',
+  '''(^|/)tests?/data/''',
+  '''(^|/)__fixtures__/''',
+
+  # Example / template env files that ship placeholders.
+  '''\.env\.example$''',
+  '''\.env\.[a-z0-9.-]+\.example$''',
+  '''gitignore\.template$''',
+
+  # The shared MedinovAI allow-templates themselves.
+  '''templates/secret-hygiene/''',
+  '''\.gitleaks\.toml$''',
+  '''\.gitleaks\.toml\.template$''',
+  '''\.secrets\.baseline$''',
+
+  # Historical security documentation that intentionally cites redacted
+  # key prefixes (e.g. CyberSecurity#14 incident report).
+  '''SECURITY_INCIDENT.*\.md$''',
+  '''docs/adr/ADR-.*\.md$''',
+]
+
+regexes = [
+  # Obvious placeholders never counted as leaks.
+  '''REPLACE_ME''',
+  '''REDACTED_[A-Z0-9_]+''',
+  '''DO_NOT_USE_SERVER_SIDE_ONLY''',
+  '''xxxxxxxxxxxxxxxxxxxxxxxxxxxx''',
+  '''your[-_]?(api[-_]?key|secret|token|password)''',
+]
